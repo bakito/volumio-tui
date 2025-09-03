@@ -20,11 +20,10 @@ import (
 	"github.com/grandcat/zeroconf"
 
 	"github.com/bakito/volumio-tui/internal/client"
+	"github.com/bakito/volumio-tui/internal/version"
 )
 
 const pollInterval = 2 * time.Second
-
-var Version = "devel"
 
 // TUI
 
@@ -440,7 +439,7 @@ func (m *model) View() string {
 
 	// Draw the rest of the UI first.
 	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
-	b.WriteString(" " + dimStyle.Render("("+Version+")"))
+	b.WriteString(" " + dimStyle.Render("("+version.Version+")"))
 	b.WriteString("\n")
 
 	// Connection
@@ -520,7 +519,7 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Println("Version:", Version)
+		fmt.Println("Version:", version.Version)
 		os.Exit(0)
 	}
 

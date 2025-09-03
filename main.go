@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	_ "embed"
-	"encoding/base64"
-	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -24,12 +22,7 @@ import (
 	"github.com/bakito/volumio-tui/internal/client"
 )
 
-const (
-	pollInterval = 2 * time.Second
-)
-
-//go:embed volumio48.png
-var volumioPNG []byte
+const pollInterval = 2 * time.Second
 
 var Version = "devel"
 
@@ -81,11 +74,6 @@ type model struct {
 	editing    bool
 	connected  bool
 	spin       spinner.Model
-
-	// Image rendering/cache
-	winW, winH     int
-	imageSeqCached string
-	imageBytesB64  string
 }
 
 func initialModel(host string) *model {
@@ -107,66 +95,31 @@ func initialModel(host string) *model {
 		spin:      s,
 	}
 
-	if len(volumioPNG) > 0 {
-		m.imageBytesB64 = base64.StdEncoding.EncodeToString(volumioPNG)
-		// Build once: fixed 48x48 px
-		if seq, err := buildInlineImageSequenceFixedPx(m.imageBytesB64, len(volumioPNG), 48, 48); err == nil {
-			m.imageSeqCached = seq
-		}
-	}
-
 	return m
 }
 
-// Build an iTerm2/WezTerm inline image sequence with fixed pixel size.
-func buildInlineImageSequenceFixedPx(b64 string, sizeBytes, widthPx, heightPx int) (string, error) {
-	if b64 == "" {
-		return "", errors.New("no image data")
+func getDefaultHost(ctx context.Context, host string) (string, error) {
+	if host != "" {
+		return normalizeHost(host), nil
 	}
-	if widthPx <= 0 || heightPx <= 0 {
-		return "", errors.New("invalid pixel size")
-	}
-	esc := "\x1b]"
-	st := "\x1b\\"
-	params := []string{"1337;File=inline=1"}
-	if sizeBytes > 0 {
-		params = append(params, "size="+strconv.Itoa(sizeBytes))
-	}
-	params = append(params,
-		"width="+strconv.Itoa(widthPx)+"px",
-		"height="+strconv.Itoa(heightPx)+"px",
-	)
-	// preserveAspectRatio is irrelevant when both width and height are provided
-	return esc + strings.Join(params, ";") + ":" + b64 + st, nil
-}
 
-func ansiSaveCursor() string    { return "\x1b[s" }
-func ansiRestoreCursor() string { return "\x1b[u" }
-func ansiCursorPos(row, col int) string {
-	if row < 1 {
-		row = 1
-	}
-	if col < 1 {
-		col = 1
-	}
-	return "\x1b[" + strconv.Itoa(row) + ";" + strconv.Itoa(col) + "H"
-}
-
-func getDefaultHost(ctx context.Context) (string, error) {
 	if v := strings.TrimSpace(os.Getenv("VOLUMIO_URL")); v != "" {
 		return v, nil
 	}
 	if v := strings.TrimSpace(os.Getenv("VOLUMIO_HOST")); v != "" {
-		// Accept host/ip and normalize
-		if !strings.Contains(v, "://") {
-			v = "http://" + v
-		}
-		if !strings.Contains(v, ":") {
-			v += ":3000"
-		}
-		return v, nil
+		return normalizeHost(v), nil
 	}
 	return discoverVolumio(ctx)
+}
+
+func normalizeHost(host string) string {
+	if !strings.Contains(host, ":") {
+		host += ":3000"
+	}
+	if !strings.Contains(host, "://") {
+		host = "http://" + host
+	}
+	return host
 }
 
 // discoverVolumio performs mDNS/Bonjour discovery of Volumio services (_volumio._tcp)
@@ -417,11 +370,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 		}
 
-	case tea.WindowSizeMsg:
-		m.winW = msg.Width
-		m.winH = msg.Height
-		return m, nil
-
 	case refreshMsg:
 		// Detect play-state transitions to start/stop spinner ticking.
 		prevPlaying := strings.EqualFold(m.st.Status, "play")
@@ -563,24 +511,12 @@ func (m *model) View() string {
 		}))
 	}
 
-	// Finally, draw the image last so it sits visually on top.
-	if m.winW > 0 && m.imageSeqCached != "" {
-		const reserveCols = 8
-		col := m.winW - reserveCols + 1
-		if col < 1 {
-			col = 1
-		}
-		b.WriteString(ansiSaveCursor())
-		b.WriteString(ansiCursorPos(1, col))
-		b.WriteString(m.imageSeqCached)
-		b.WriteString(ansiRestoreCursor())
-	}
-
 	return b.String()
 }
 
 func main() {
 	versionFlag := flag.Bool("v", false, "Print version")
+	hostFlag := flag.String("h", "", "Volumio host")
 	flag.Parse()
 
 	if *versionFlag {
@@ -588,7 +524,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	host, err := getDefaultHost(context.Background())
+	host, err := getDefaultHost(context.Background(), *hostFlag)
 	if err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)

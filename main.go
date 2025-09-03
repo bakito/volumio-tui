@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +73,31 @@ func (c *volumioClient) Pause(ctx context.Context) error  { return c.cmd(ctx, "p
 func (c *volumioClient) Stop(ctx context.Context) error   { return c.cmd(ctx, "stop") }
 func (c *volumioClient) Toggle(ctx context.Context) error { return c.cmd(ctx, "toggle") }
 
+// SetVolume sets the absolute volume (0..100).
+func (c *volumioClient) SetVolume(ctx context.Context, vol int) error {
+	if vol < 0 {
+		vol = 0
+	}
+	if vol > 100 {
+		vol = 100
+	}
+	// Build the query properly so &volume is not escaped into the cmd value.
+	reqURL := fmt.Sprintf("%s/api/v1/commands/?cmd=volume&volume=%d", strings.TrimRight(c.baseURL, "/"), vol)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("set volume failed: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 type state struct {
 	Status       string  `json:"status"` // "play","pause","stop"
 	Title        string  `json:"title"`
@@ -128,6 +154,8 @@ type keymap struct {
 	Cancel    key.Binding
 	Quit      key.Binding
 	Help      key.Binding
+	VolUp     key.Binding
+	VolDown   key.Binding
 }
 
 func defaultKeymap() keymap {
@@ -142,6 +170,8 @@ func defaultKeymap() keymap {
 		Cancel:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel edit")),
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
+		VolUp:     key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "volume up")),
+		VolDown:   key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "volume down")),
 	}
 }
 
@@ -286,6 +316,21 @@ func (m *model) toggleCmd() tea.Cmd {
 	return m.simpleCmd(func(ctx context.Context) error { return m.client.Toggle(ctx) })
 }
 
+// changeVolume adjusts volume relative to current state by delta and sets it.
+func (m *model) changeVolume(delta int) tea.Cmd {
+	if m.client == nil {
+		return nil
+	}
+	newVol := m.st.Volume + delta
+	if newVol < 0 {
+		newVol = 0
+	}
+	if newVol > 100 {
+		newVol = 100
+	}
+	return m.simpleCmd(func(ctx context.Context) error { return m.client.SetVolume(ctx, newVol) })
+}
+
 func (m *model) simpleCmd(fn func(context.Context) error) tea.Cmd {
 	if m.client == nil {
 		return nil
@@ -356,6 +401,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Refresh):
 			m.loading = true
 			return m, m.refreshCmd()
+		case key.Matches(msg, m.keys.VolUp):
+			m.loading = true
+			// Step by 5
+			return m, m.changeVolume(5)
+		case key.Matches(msg, m.keys.VolDown):
+			m.loading = true
+			// Step by -5
+			return m, m.changeVolume(-5)
+		case msg.Type == tea.KeyUp: // fallback for terminals not matching "up"
+			m.loading = true
+			return m, m.changeVolume(5)
+		case msg.Type == tea.KeyDown: // fallback for terminals not matching "down"
+			m.loading = true
+			return m, m.changeVolume(-5)
 		}
 
 	case tea.WindowSizeMsg:
@@ -451,6 +510,7 @@ func (m *model) View() string {
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Playback:"), statusText))
 	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Track:   "), valueStyle.Render(track)))
+	b.WriteString(fmt.Sprintf("%s %s%%\n", labelStyle.Render("Volume:  "), valueStyle.Render(strconv.Itoa(m.st.Volume))))
 
 	// Error
 	if m.err != nil {
@@ -467,11 +527,12 @@ func (m *model) View() string {
 	if m.showHelp {
 		b.WriteString(m.help.FullHelpView([][]key.Binding{
 			{m.keys.PlayPause, m.keys.Play, m.keys.Pause, m.keys.Stop, m.keys.Refresh},
+			{m.keys.VolUp, m.keys.VolDown},
 			{m.keys.EditHost, m.keys.SaveHost, m.keys.Cancel, m.keys.Help, m.keys.Quit},
 		}))
 	} else {
 		b.WriteString(m.help.ShortHelpView([]key.Binding{
-			m.keys.PlayPause, m.keys.Stop, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
+			m.keys.PlayPause, m.keys.Stop, m.keys.VolUp, m.keys.VolDown, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
 		}))
 	}
 

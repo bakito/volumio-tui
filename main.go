@@ -620,10 +620,14 @@ func (m *model) View() string {
 	if m.connected {
 		conn = connectedOn.Render("connected")
 	}
-	b.WriteString(fmt.Sprintf("%s %s  %s %s\n",
+	statusLine := fmt.Sprintf("%s %s  %s %s",
 		labelStyle.Render("Status:"), conn,
 		labelStyle.Render("Host:"), valueStyle.Render(m.host),
-	))
+	)
+	if m.loading {
+		statusLine += "  " + dimStyle.Render("Working...")
+	}
+	b.WriteString(statusLine + "\n")
 
 	// Edit host
 	if m.editing {
@@ -662,11 +666,6 @@ func (m *model) View() string {
 	// Error
 	if m.err != nil {
 		b.WriteString("\n" + errorStyle.Render("Error: "+m.err.Error()) + "\n")
-	}
-
-	// Loading
-	if m.loading {
-		b.WriteString(dimStyle.Render("\nWorking...\n"))
 	}
 
 	// Help

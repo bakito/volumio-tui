@@ -160,7 +160,8 @@ type keymap struct {
 
 func defaultKeymap() keymap {
 	return keymap{
-		PlayPause: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle play/pause")),
+		// Use " " (single space) for the space key
+		PlayPause: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle play/pause")),
 		Play:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "play")),
 		Pause:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "pause")),
 		Stop:      key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stop")),
@@ -409,6 +410,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = true
 			// Step by -5
 			return m, m.changeVolume(-5)
+		case msg.Type == tea.KeySpace: // fallback for terminals not matching the binding
+			m.loading = true
+			return m, m.toggleCmd()
 		case msg.Type == tea.KeyUp: // fallback for terminals not matching "up"
 			m.loading = true
 			return m, m.changeVolume(5)

@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/grandcat/zeroconf"
 )
 
 const (
@@ -222,6 +223,60 @@ func getDefaultHost() string {
 		return v
 	}
 	return defaultBaseURL
+}
+
+// discoverVolumio performs mDNS/Bonjour discovery of Volumio services (_volumio._tcp)
+// and returns the first discovered HTTP base URL (e.g., http://192.168.1.10:3000).
+func discoverVolumio(ctx context.Context) (string, error) {
+	resolver, err := zeroconf.NewResolver(nil)
+	if err != nil {
+		return "", err
+	}
+
+	entries := make(chan *zeroconf.ServiceEntry)
+	defer close(entries)
+
+	foundCh := make(chan string, 1)
+	defer close(foundCh)
+
+	// Collect the first viable entry and stop.
+	go func() {
+		for e := range entries {
+			// Prefer IPv4 address if available; otherwise, use hostname.
+			var host string
+			if len(e.AddrIPv4) > 0 {
+				host = e.AddrIPv4[0].String()
+			} else if len(e.AddrIPv6) > 0 {
+				// IPv6 literal needs brackets in URLs.
+				host = "[" + e.AddrIPv6[0].String() + "]"
+			} else if e.HostName != "" {
+				// Fallback to hostname; often ends with .local.
+				host = strings.TrimSuffix(e.HostName, ".") // normalize trailing dot
+			}
+
+			if host == "" || e.Port == 0 {
+				continue
+			}
+			// Construct Volumio base URL. Volumio UI usually runs on port 3000.
+			url := fmt.Sprintf("http://%s:%d", host, e.Port)
+			select {
+			case foundCh <- url:
+			default:
+			}
+			return
+		}
+	}()
+
+	if err := resolver.Browse(ctx, "_volumio._tcp", "local.", entries); err != nil {
+		return "", err
+	}
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case url := <-foundCh:
+		return url, nil
+	}
 }
 
 type (

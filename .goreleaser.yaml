@@ -4,8 +4,8 @@ version: 2
 builds:
   - env:
       - CGO_ENABLED=0
-    #ldflags:
-    #  - -s -w -X github.com/bakito/volumio-tui/version.Version=v{{.Version}}
+    ldflags:
+      - -s -w -X github.com/bakito/volumio-tui.Version=v{{.Version}}
     goos:
       - linux
       - windows

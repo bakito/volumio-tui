@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -25,6 +26,8 @@ const (
 	httpTimeout  = 5 * time.Second
 	pollInterval = 2 * time.Second
 )
+
+var Version = "devel"
 
 type volumioClient struct {
 	baseURL string
@@ -216,11 +219,11 @@ func getDefaultHost(ctx context.Context) (string, error) {
 			v = "http://" + v
 		}
 		if !strings.Contains(v, ":") {
-			v = v + ":3000"
+			v += ":3000"
 		}
 		return v, nil
 	}
-	return discoverVolumio(context.Background())
+	return discoverVolumio(ctx)
 }
 
 // discoverVolumio performs mDNS/Bonjour discovery of Volumio services (_volumio._tcp)
@@ -242,23 +245,25 @@ func discoverVolumio(ctx context.Context) (string, error) {
 		for e := range entries {
 			// Prefer IPv4 address if available; otherwise, use hostname.
 			var host string
-			if len(e.AddrIPv4) > 0 {
+			switch {
+			case len(e.AddrIPv4) > 0:
 				host = e.AddrIPv4[0].String()
-			} else if len(e.AddrIPv6) > 0 {
+			case len(e.AddrIPv6) > 0:
 				// IPv6 literal needs brackets in URLs.
 				host = "[" + e.AddrIPv6[0].String() + "]"
-			} else if e.HostName != "" {
+			case e.HostName != "":
 				// Fallback to hostname; often ends with .local.
 				host = strings.TrimSuffix(e.HostName, ".") // normalize trailing dot
+			default:
 			}
 
 			if host == "" || e.Port == 0 {
 				continue
 			}
 			// Construct Volumio base URL. Volumio UI usually runs on port 3000.
-			url := fmt.Sprintf("http://%s:%d", host, e.Port)
+			addr := "http://" + net.JoinHostPort(host, strconv.Itoa(int(rune(e.Port))))
 			select {
-			case foundCh <- url:
+			case foundCh <- addr:
 			default:
 			}
 			return
@@ -272,8 +277,8 @@ func discoverVolumio(ctx context.Context) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
-	case url := <-foundCh:
-		return url, nil
+	case addr := <-foundCh:
+		return addr, nil
 	case <-time.After(5 * time.Second):
 		return "", nil
 	}
@@ -317,19 +322,24 @@ func probeHost(raw string) error {
 	}
 	host := u.Host
 	if !strings.Contains(host, ":") {
-		host = host + ":80"
+		host += ":80"
 	}
-	conn, err := net.DialTimeout("tcp", host, 2*time.Second)
+	d := net.Dialer{Timeout: 2 * time.Second}
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel1()
+	conn, err := d.DialContext(ctx1, "tcp", host)
 	if err != nil {
 		// Try common Volumio port if user omitted it
 		host3000 := u.Hostname() + ":3000"
-		if c2, err2 := net.DialTimeout("tcp", host3000, 2*time.Second); err2 == nil {
-			c2.Close()
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel2()
+		if c2, err2 := d.DialContext(ctx2, "tcp", host3000); err2 == nil {
+			_ = c2.Close()
 			return nil
 		}
 		return err
 	}
-	conn.Close()
+	_ = conn.Close()
 	return nil
 }
 
@@ -448,36 +458,47 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, m.keys.PlayPause):
 			m.loading = true
-			return m, m.toggleCmd()
+			cmd := m.toggleCmd()
+			return m, cmd
 		case key.Matches(msg, m.keys.Play):
 			m.loading = true
-			return m, m.playCmd()
+			cmd := m.playCmd()
+			return m, cmd
 		case key.Matches(msg, m.keys.Pause):
 			m.loading = true
-			return m, m.pauseCmd()
+			cmd := m.pauseCmd()
+			return m, cmd
 		case key.Matches(msg, m.keys.Stop):
 			m.loading = true
-			return m, m.stopCmd()
+			cmd := m.stopCmd()
+			return m, cmd
 		case key.Matches(msg, m.keys.Refresh):
 			m.loading = true
-			return m, m.refreshCmd()
+			cmd := m.refreshCmd()
+			return m, cmd
 		case key.Matches(msg, m.keys.VolUp):
 			m.loading = true
 			// Step by 5
-			return m, m.changeVolume(5)
+			cmd := m.changeVolume(5)
+			return m, cmd
 		case key.Matches(msg, m.keys.VolDown):
 			m.loading = true
 			// Step by -5
-			return m, m.changeVolume(-5)
+			cmd := m.changeVolume(-5)
+			return m, cmd
 		case msg.Type == tea.KeySpace: // fallback for terminals not matching the binding
 			m.loading = true
-			return m, m.toggleCmd()
+			cmd := m.toggleCmd()
+			return m, cmd
 		case msg.Type == tea.KeyUp: // fallback for terminals not matching "up"
 			m.loading = true
-			return m, m.changeVolume(5)
+			cmd := m.changeVolume(5)
+			return m, cmd
 		case msg.Type == tea.KeyDown: // fallback for terminals not matching "down"
 			m.loading = true
-			return m, m.changeVolume(-5)
+			cmd := m.changeVolume(-5)
+			return m, cmd
+		default:
 		}
 
 	case tea.WindowSizeMsg:
@@ -492,7 +513,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectedMsg:
 		// After a successful connection, perform an initial refresh.
 		m.loading = true
-		return m, m.refreshCmd()
+		cmd := m.refreshCmd()
+		return m, cmd
 
 	case errorMsg:
 		m.err = msg
@@ -507,7 +529,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.pollTicker != nil {
 		select {
 		case <-m.pollTicker.C:
-			return m, m.refreshCmd()
+			cmd := m.refreshCmd()
+			return m, cmd
 		default:
 		}
 	}
@@ -531,6 +554,9 @@ var (
 func (m *model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
+	if Version != "" {
+		b.WriteString(" " + dimStyle.Render("("+Version+")"))
+	}
 	b.WriteString("\n")
 
 	// Connection
@@ -604,6 +630,14 @@ func (m *model) View() string {
 }
 
 func main() {
+	versionFlag := flag.Bool("v", false, "Print version")
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println("Version:", Version)
+		os.Exit(0)
+	}
+
 	host, err := getDefaultHost(context.Background())
 	if err != nil {
 		fmt.Println("Error:", err)

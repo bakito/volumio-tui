@@ -189,6 +189,12 @@ linters:
       - linters:
           - forbidigo
         path: assets/scripts/generate-commit.go
+      - linters:
+          - revive
+        text: Unhandled error in call to function strings\.Builder\.WriteString
+      - linters:
+          - revive
+        text: Unhandled error in call to function fmt\.Println
 formatters:
   enable:
     - gci

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,9 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"encoding/base64"
-	"io"
-
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -24,6 +23,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/grandcat/zeroconf"
 )
+
+// Embed the logo so path issues can't break rendering.
+//
+//go:embed volumio48.png
+var volumioPNG []byte
 
 const (
 	httpTimeout  = 5 * time.Second
@@ -198,8 +202,12 @@ type model struct {
 	editing    bool
 	connected  bool
 
-	imageSeq  string
-	showImage bool
+	// Image rendering/cache
+	showImage      bool
+	winW, winH     int
+	imgColsCached  int
+	imageSeqCached string
+	imageBytesB64  string
 }
 
 func initialModel(host string) *model {
@@ -214,49 +222,50 @@ func initialModel(host string) *model {
 		host:      ti.Value(),
 		keys:      defaultKeymap(),
 		help:      help.New(),
+		showImage: true,
 	}
 
-	// Best-effort load of inline image sequence. Non-fatal if it fails.
-	if seq, err := buildInlineImageSequence("volumio.png", "100%", "auto", true); err == nil {
-		m.imageSeq = seq
-		m.showImage = true
+	if len(volumioPNG) > 0 {
+		m.imageBytesB64 = base64.StdEncoding.EncodeToString(volumioPNG)
 	}
 
 	return m
 }
 
-// buildInlineImageSequence creates an iTerm2/WezTerm inline image escape sequence.
-// width and height can be values like: "100%", "auto", "800px", "40" (cells).
-// preserveAspect controls aspect ratio preservation.
-// Returns a string with the full OSC 1337 sequence, ready to print.
-func buildInlineImageSequence(path, width, height string, preserveAspect bool) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
+// Build an iTerm2/WezTerm inline image sequence sized in terminal cells.
+// widthCols/heightRows in cells; if heightRows==0 and preserve is true, aspect is preserved.
+func buildInlineImageSequenceWithDims(b64 string, sizeBytes, widthCols, heightRows int, preserve bool) (string, error) {
+	if b64 == "" {
+		return "", errors.New("no image data")
 	}
-	defer f.Close()
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return "", err
-	}
-	b64 := base64.StdEncoding.EncodeToString(data)
-
-	// ESC ] 1337 ; File=... : <data> BEL
 	esc := "\x1b]"
 	st := "\x1b\\"
-	// Use ST (String Terminator) for robustness.
 	params := []string{"1337;File=inline=1"}
-	if width != "" {
-		params = append(params, "width="+width)
+	if sizeBytes > 0 {
+		params = append(params, "size="+strconv.Itoa(sizeBytes))
 	}
-	if height != "" {
-		params = append(params, "height="+height)
+	if widthCols > 0 {
+		params = append(params, "width="+strconv.Itoa(widthCols))
 	}
-	if preserveAspect {
+	if heightRows > 0 {
+		params = append(params, "height="+strconv.Itoa(heightRows))
+	}
+	if preserve && heightRows == 0 {
 		params = append(params, "preserveAspectRatio=1")
 	}
-	seq := esc + strings.Join(params, ";") + ":" + b64 + st
-	return seq, nil
+	return esc + strings.Join(params, ";") + ":" + b64 + st, nil
+}
+
+func ansiSaveCursor() string    { return "\x1b[s" }
+func ansiRestoreCursor() string { return "\x1b[u" }
+func ansiCursorPos(row, col int) string {
+	if row < 1 {
+		row = 1
+	}
+	if col < 1 {
+		col = 1
+	}
+	return "\x1b[" + strconv.Itoa(row) + ";" + strconv.Itoa(col) + "H"
 }
 
 func getDefaultHost(ctx context.Context) (string, error) {
@@ -555,7 +564,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
-		// no-op for now
+		m.winW = msg.Width
+		m.winH = msg.Height
+		return m, nil
 
 	case refreshMsg:
 		m.st = state(msg)
@@ -606,20 +617,53 @@ var (
 
 func (m *model) View() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
-	if Version != "" {
-		b.WriteString(" " + dimStyle.Render("("+Version+")"))
+
+	// Always render image at upper-right corner using absolute cursor positioning.
+	if m.showImage && m.winW > 0 && m.imageBytesB64 != "" {
+		imgCols := m.winW / 3
+		if imgCols < 16 {
+			imgCols = 16
+		}
+		if imgCols > 48 {
+			imgCols = 48
+		}
+		if imgCols != m.imgColsCached || m.imageSeqCached == "" {
+			if seq, err := buildInlineImageSequenceWithDims(m.imageBytesB64, len(volumioPNG), imgCols, 0, true); err == nil {
+				m.imageSeqCached = seq
+				m.imgColsCached = imgCols
+			} else {
+				m.imageSeqCached = ""
+			}
+		}
+		if m.imageSeqCached != "" {
+			col := m.winW - m.imgColsCached + 1
+			if col < 1 {
+				col = 1
+			}
+			b.WriteString(ansiSaveCursor())
+			b.WriteString(ansiCursorPos(1, col))
+			b.WriteString(m.imageSeqCached)
+			b.WriteString(ansiRestoreCursor())
+		}
 	}
+
+	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
+	b.WriteString(" " + dimStyle.Render("("+Version+")"))
 	b.WriteString("\n")
 
-	// Connection
+	// Connection and image indicator
 	conn := connectedOff.Render("disconnected")
 	if m.connected {
 		conn = connectedOn.Render("connected")
 	}
-	b.WriteString(fmt.Sprintf("%s %s  %s %s\n",
+	imgStatus := dimStyle.Render("image: off")
+	if m.showImage && m.imageSeqCached != "" {
+		imgStatus = dimStyle.Render("image: on")
+	}
+	b.WriteString(fmt.Sprintf("%s %s  %s %s  %s\n",
 		labelStyle.Render("Status:"), conn,
 		labelStyle.Render("Host:"), valueStyle.Render(m.host),
+		imgStatus,
 	))
 
 	// Edit host
@@ -627,6 +671,7 @@ func (m *model) View() string {
 		b.WriteString("\n" + m.hostInput.View() + "\n")
 		b.WriteString(dimStyle.Render("Press Enter to save, Esc to cancel\n"))
 	}
+
 	// Playback info
 	statusText := strings.ToLower(m.st.Status)
 	switch statusText {

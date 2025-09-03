@@ -24,9 +24,7 @@ import (
 	"github.com/grandcat/zeroconf"
 )
 
-// Embed the logo so path issues can't break rendering.
-//
-//go:embed volumio48.png
+//go:embed volumio.png
 var volumioPNG []byte
 
 const (
@@ -205,7 +203,6 @@ type model struct {
 	// Image rendering/cache
 	showImage      bool
 	winW, winH     int
-	imgColsCached  int
 	imageSeqCached string
 	imageBytesB64  string
 }
@@ -227,16 +224,22 @@ func initialModel(host string) *model {
 
 	if len(volumioPNG) > 0 {
 		m.imageBytesB64 = base64.StdEncoding.EncodeToString(volumioPNG)
+		// Build once: fixed 48x48 px
+		if seq, err := buildInlineImageSequenceFixedPx(m.imageBytesB64, len(volumioPNG), 48, 48); err == nil {
+			m.imageSeqCached = seq
+		}
 	}
 
 	return m
 }
 
-// Build an iTerm2/WezTerm inline image sequence sized in terminal cells.
-// widthCols/heightRows in cells; if heightRows==0 and preserve is true, aspect is preserved.
-func buildInlineImageSequenceWithDims(b64 string, sizeBytes, widthCols, heightRows int, preserve bool) (string, error) {
+// Build an iTerm2/WezTerm inline image sequence with fixed pixel size.
+func buildInlineImageSequenceFixedPx(b64 string, sizeBytes, widthPx, heightPx int) (string, error) {
 	if b64 == "" {
 		return "", errors.New("no image data")
+	}
+	if widthPx <= 0 || heightPx <= 0 {
+		return "", errors.New("invalid pixel size")
 	}
 	esc := "\x1b]"
 	st := "\x1b\\"
@@ -244,15 +247,9 @@ func buildInlineImageSequenceWithDims(b64 string, sizeBytes, widthCols, heightRo
 	if sizeBytes > 0 {
 		params = append(params, "size="+strconv.Itoa(sizeBytes))
 	}
-	if widthCols > 0 {
-		params = append(params, "width="+strconv.Itoa(widthCols))
-	}
-	if heightRows > 0 {
-		params = append(params, "height="+strconv.Itoa(heightRows))
-	}
-	if preserve && heightRows == 0 {
-		params = append(params, "preserveAspectRatio=1")
-	}
+	params = append(params, "width="+strconv.Itoa(widthPx)+"px")
+	params = append(params, "height="+strconv.Itoa(heightPx)+"px")
+	// preserveAspectRatio is irrelevant when both width and height are provided
 	return esc + strings.Join(params, ";") + ":" + b64 + st, nil
 }
 
@@ -618,37 +615,11 @@ var (
 func (m *model) View() string {
 	var b strings.Builder
 
-	// Always render image at upper-right corner using absolute cursor positioning.
-	if m.showImage && m.winW > 0 && m.imageBytesB64 != "" {
-		imgCols := m.winW / 3
-		if imgCols < 16 {
-			imgCols = 16
-		}
-		if imgCols > 48 {
-			imgCols = 48
-		}
-		if imgCols != m.imgColsCached || m.imageSeqCached == "" {
-			if seq, err := buildInlineImageSequenceWithDims(m.imageBytesB64, len(volumioPNG), imgCols, 0, true); err == nil {
-				m.imageSeqCached = seq
-				m.imgColsCached = imgCols
-			} else {
-				m.imageSeqCached = ""
-			}
-		}
-		if m.imageSeqCached != "" {
-			col := m.winW - m.imgColsCached + 1
-			if col < 1 {
-				col = 1
-			}
-			b.WriteString(ansiSaveCursor())
-			b.WriteString(ansiCursorPos(1, col))
-			b.WriteString(m.imageSeqCached)
-			b.WriteString(ansiRestoreCursor())
-		}
-	}
-
+	// Draw the rest of the UI first.
 	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
-	b.WriteString(" " + dimStyle.Render("("+Version+")"))
+	if Version != "" {
+		b.WriteString(" " + dimStyle.Render("("+Version+")"))
+	}
 	b.WriteString("\n")
 
 	// Connection and image indicator
@@ -722,6 +693,21 @@ func (m *model) View() string {
 		b.WriteString(m.help.ShortHelpView([]key.Binding{
 			m.keys.PlayPause, m.keys.Stop, m.keys.VolUp, m.keys.VolDown, m.keys.Image, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
 		}))
+	}
+
+	// Finally, draw the image last so it sits visually on top.
+	if m.showImage && m.winW > 0 && m.imageSeqCached != "" {
+		// Reserve a small number of columns near the right edge so a 48px image stays within view.
+		// Typical terminal cell widths are ~8–12 px; reserving 8 cells is a safe default.
+		const reserveCols = 8
+		col := m.winW - reserveCols + 1
+		if col < 1 {
+			col = 1
+		}
+		b.WriteString(ansiSaveCursor())
+		b.WriteString(ansiCursorPos(1, col))
+		b.WriteString(m.imageSeqCached)
+		b.WriteString(ansiRestoreCursor())
 	}
 
 	return b.String()

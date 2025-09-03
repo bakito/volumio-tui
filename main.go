@@ -1,15 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"image"
-	_ "image/png"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"encoding/base64"
+	"io"
+
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -25,9 +24,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/grandcat/zeroconf"
 )
-
-//go:embed volumio.png
-var volumioPNG []byte
 
 const (
 	httpTimeout  = 5 * time.Second
@@ -166,6 +162,7 @@ type keymap struct {
 	Help      key.Binding
 	VolUp     key.Binding
 	VolDown   key.Binding
+	Image     key.Binding
 }
 
 func defaultKeymap() keymap {
@@ -183,6 +180,7 @@ func defaultKeymap() keymap {
 		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
 		VolUp:     key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "volume up")),
 		VolDown:   key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "volume down")),
+		Image:     key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "toggle image")),
 	}
 }
 
@@ -199,8 +197,9 @@ type model struct {
 	showHelp   bool
 	editing    bool
 	connected  bool
-	// Pre-rendered logo to avoid recomputing each view
-	logo string
+
+	imageSeq  string
+	showImage bool
 }
 
 func initialModel(host string) *model {
@@ -210,13 +209,54 @@ func initialModel(host string) *model {
 	ti.CharLimit = 256
 	ti.Blur()
 
-	return &model{
+	m := &model{
 		hostInput: ti,
 		host:      ti.Value(),
 		keys:      defaultKeymap(),
 		help:      help.New(),
-		logo:      renderLogoANSI(volumioPNG, 34), // ~34 columns wide logo
 	}
+
+	// Best-effort load of inline image sequence. Non-fatal if it fails.
+	if seq, err := buildInlineImageSequence("volumio.png", "100%", "auto", true); err == nil {
+		m.imageSeq = seq
+		m.showImage = true
+	}
+
+	return m
+}
+
+// buildInlineImageSequence creates an iTerm2/WezTerm inline image escape sequence.
+// width and height can be values like: "100%", "auto", "800px", "40" (cells).
+// preserveAspect controls aspect ratio preservation.
+// Returns a string with the full OSC 1337 sequence, ready to print.
+func buildInlineImageSequence(path, width, height string, preserveAspect bool) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return "", err
+	}
+	b64 := base64.StdEncoding.EncodeToString(data)
+
+	// ESC ] 1337 ; File=... : <data> BEL
+	esc := "\x1b]"
+	st := "\x1b\\"
+	// Use ST (String Terminator) for robustness.
+	params := []string{"1337;File=inline=1"}
+	if width != "" {
+		params = append(params, "width="+width)
+	}
+	if height != "" {
+		params = append(params, "height="+height)
+	}
+	if preserveAspect {
+		params = append(params, "preserveAspectRatio=1")
+	}
+	seq := esc + strings.Join(params, ";") + ":" + b64 + st
+	return seq, nil
 }
 
 func getDefaultHost(ctx context.Context) (string, error) {
@@ -466,6 +506,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editing = true
 			m.hostInput.Focus()
 			return m, nil
+		case key.Matches(msg, m.keys.Image):
+			m.showImage = !m.showImage
+			return m, nil
 		case key.Matches(msg, m.keys.PlayPause):
 			m.loading = true
 			cmd := m.toggleCmd()
@@ -561,71 +604,8 @@ var (
 	dimStyle     = lipgloss.NewStyle().Faint(true)
 )
 
-// renderLogoANSI converts a PNG image (bytes) into a small ANSI-colored
-// half-block representation suitable for terminals supporting truecolor.
-// maxCols controls the target width in characters.
-func renderLogoANSI(pngData []byte, maxCols int) string {
-	if len(pngData) == 0 || maxCols <= 0 {
-		return ""
-	}
-	img, _, err := image.Decode(bytes.NewReader(pngData))
-	if err != nil {
-		return ""
-	}
-	b := img.Bounds()
-	w, h := b.Dx(), b.Dy()
-	if w <= 0 || h <= 0 {
-		return ""
-	}
-	if w < maxCols {
-		maxCols = w
-	}
-	// Downsample using nearest-neighbor sampling.
-	// Use half-blocks: two image rows per terminal row.
-	stepX := float64(w) / float64(maxCols)
-
-	// Keep aspect roughly by matching vertical step to horizontal.
-	// Each terminal row represents 2 image rows; so:
-	stepY := stepX
-	charRows := int(float64(h) / (2 * stepY))
-	if charRows <= 0 {
-		charRows = 1
-	}
-
-	var sb strings.Builder
-	for cy := range charRows {
-		topY := int(float64(cy*2) * stepY)
-		btmY := int(float64(cy*2+1) * stepY)
-		if topY >= h {
-			break
-		}
-		if btmY >= h {
-			btmY = h - 1
-		}
-		for cx := range maxCols {
-			srcX := int(float64(cx) * stepX)
-			if srcX >= w {
-				srcX = w - 1
-			}
-			tr, tg, tb, _ := img.At(b.Min.X+srcX, b.Min.Y+topY).RGBA()
-			br, bg, bb, _ := img.At(b.Min.X+srcX, b.Min.Y+btmY).RGBA()
-			// Convert from 16-bit to 8-bit
-			r1, g1, b1 := uint8(tr>>8), uint8(tg>>8), uint8(tb>>8)
-			r2, g2, b2 := uint8(br>>8), uint8(bg>>8), uint8(bb>>8)
-			// Set foreground as top pixel, background as bottom pixel, draw upper half block (▀)
-			// 38;2 for foreground, 48;2 for background
-			sb.WriteString(fmt.Sprintf("\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm▀", r1, g1, b1, r2, g2, b2))
-		}
-		sb.WriteString("\x1b[0m\n")
-	}
-	return sb.String()
-}
-
 func (m *model) View() string {
 	var b strings.Builder
-	if m.logo != "" {
-		b.WriteString(m.logo)
-	}
 	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
 	if Version != "" {
 		b.WriteString(" " + dimStyle.Render("("+Version+")"))
@@ -690,12 +670,12 @@ func (m *model) View() string {
 	if m.showHelp {
 		b.WriteString(m.help.FullHelpView([][]key.Binding{
 			{m.keys.PlayPause, m.keys.Play, m.keys.Pause, m.keys.Stop, m.keys.Refresh},
-			{m.keys.VolUp, m.keys.VolDown},
+			{m.keys.VolUp, m.keys.VolDown, m.keys.Image},
 			{m.keys.EditHost, m.keys.SaveHost, m.keys.Cancel, m.keys.Help, m.keys.Quit},
 		}))
 	} else {
 		b.WriteString(m.help.ShortHelpView([]key.Binding{
-			m.keys.PlayPause, m.keys.Stop, m.keys.VolUp, m.keys.VolDown, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
+			m.keys.PlayPause, m.keys.Stop, m.keys.VolUp, m.keys.VolDown, m.keys.Image, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
 		}))
 	}
 

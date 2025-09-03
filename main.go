@@ -22,9 +22,8 @@ import (
 )
 
 const (
-	defaultBaseURL = "http://192.168.2.207"
-	httpTimeout    = 5 * time.Second
-	pollInterval   = 2 * time.Second
+	httpTimeout  = 5 * time.Second
+	pollInterval = 2 * time.Second
 )
 
 type volumioClient struct {
@@ -192,12 +191,11 @@ type model struct {
 	connected  bool
 }
 
-func initialModel() *model {
+func initialModel(host string) *model {
 	ti := textinput.New()
 	ti.Prompt = "Host: "
-	ti.SetValue(getDefaultHost())
+	ti.SetValue(host)
 	ti.CharLimit = 256
-	ti.Placeholder = defaultBaseURL
 	ti.Blur()
 
 	return &model{
@@ -208,9 +206,9 @@ func initialModel() *model {
 	}
 }
 
-func getDefaultHost() string {
+func getDefaultHost(ctx context.Context) (string, error) {
 	if v := strings.TrimSpace(os.Getenv("VOLUMIO_URL")); v != "" {
-		return v
+		return v, nil
 	}
 	if v := strings.TrimSpace(os.Getenv("VOLUMIO_HOST")); v != "" {
 		// Accept host/ip and normalize
@@ -220,9 +218,9 @@ func getDefaultHost() string {
 		if !strings.Contains(v, ":") {
 			v = v + ":3000"
 		}
-		return v
+		return v, nil
 	}
-	return defaultBaseURL
+	return discoverVolumio(context.Background())
 }
 
 // discoverVolumio performs mDNS/Bonjour discovery of Volumio services (_volumio._tcp)
@@ -267,7 +265,7 @@ func discoverVolumio(ctx context.Context) (string, error) {
 		}
 	}()
 
-	if err := resolver.Browse(ctx, "_volumio._tcp", "local.", entries); err != nil {
+	if err := resolver.Browse(ctx, "_Volumio._tcp", "local.", entries); err != nil {
 		return "", err
 	}
 
@@ -276,6 +274,8 @@ func discoverVolumio(ctx context.Context) (string, error) {
 		return "", ctx.Err()
 	case url := <-foundCh:
 		return url, nil
+	case <-time.After(5 * time.Second):
+		return "", nil
 	}
 }
 
@@ -604,7 +604,16 @@ func (m *model) View() string {
 }
 
 func main() {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	host, err := getDefaultHost(context.Background())
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+	if host == "" {
+		fmt.Println("No default host found")
+		os.Exit(1)
+	}
+	p := tea.NewProgram(initialModel(host), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)

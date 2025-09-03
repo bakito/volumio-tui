@@ -1,0 +1,15 @@
+name: Scan GitHub Release with VirusTotal
+
+on:
+  release:
+    types: [released]
+
+jobs:
+  scan_release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Analyze Build Assets
+        uses: bakito/virustotal-action@main
+        with:
+          release_name: ${{github.event.release.tag_name}}
+          vt_api_key: ${{secrets.VT_API_KEY}}

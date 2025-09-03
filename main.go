@@ -24,7 +24,7 @@ import (
 	"github.com/grandcat/zeroconf"
 )
 
-//go:embed volumio.png
+//go:embed volumio48.png
 var volumioPNG []byte
 
 const (
@@ -164,7 +164,6 @@ type keymap struct {
 	Help      key.Binding
 	VolUp     key.Binding
 	VolDown   key.Binding
-	Image     key.Binding
 }
 
 func defaultKeymap() keymap {
@@ -182,7 +181,6 @@ func defaultKeymap() keymap {
 		Help:      key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "toggle help")),
 		VolUp:     key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "volume up")),
 		VolDown:   key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "volume down")),
-		Image:     key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "toggle image")),
 	}
 }
 
@@ -201,7 +199,6 @@ type model struct {
 	connected  bool
 
 	// Image rendering/cache
-	showImage      bool
 	winW, winH     int
 	imageSeqCached string
 	imageBytesB64  string
@@ -219,7 +216,6 @@ func initialModel(host string) *model {
 		host:      ti.Value(),
 		keys:      defaultKeymap(),
 		help:      help.New(),
-		showImage: true,
 	}
 
 	if len(volumioPNG) > 0 {
@@ -247,8 +243,10 @@ func buildInlineImageSequenceFixedPx(b64 string, sizeBytes, widthPx, heightPx in
 	if sizeBytes > 0 {
 		params = append(params, "size="+strconv.Itoa(sizeBytes))
 	}
-	params = append(params, "width="+strconv.Itoa(widthPx)+"px")
-	params = append(params, "height="+strconv.Itoa(heightPx)+"px")
+	params = append(params,
+		"width="+strconv.Itoa(widthPx)+"px",
+		"height="+strconv.Itoa(heightPx)+"px",
+	)
 	// preserveAspectRatio is irrelevant when both width and height are provided
 	return esc + strings.Join(params, ";") + ":" + b64 + st, nil
 }
@@ -512,9 +510,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editing = true
 			m.hostInput.Focus()
 			return m, nil
-		case key.Matches(msg, m.keys.Image):
-			m.showImage = !m.showImage
-			return m, nil
 		case key.Matches(msg, m.keys.PlayPause):
 			m.loading = true
 			cmd := m.toggleCmd()
@@ -617,24 +612,17 @@ func (m *model) View() string {
 
 	// Draw the rest of the UI first.
 	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
-	if Version != "" {
-		b.WriteString(" " + dimStyle.Render("("+Version+")"))
-	}
+	b.WriteString(" " + dimStyle.Render("("+Version+")"))
 	b.WriteString("\n")
 
-	// Connection and image indicator
+	// Connection
 	conn := connectedOff.Render("disconnected")
 	if m.connected {
 		conn = connectedOn.Render("connected")
 	}
-	imgStatus := dimStyle.Render("image: off")
-	if m.showImage && m.imageSeqCached != "" {
-		imgStatus = dimStyle.Render("image: on")
-	}
-	b.WriteString(fmt.Sprintf("%s %s  %s %s  %s\n",
+	b.WriteString(fmt.Sprintf("%s %s  %s %s\n",
 		labelStyle.Render("Status:"), conn,
 		labelStyle.Render("Host:"), valueStyle.Render(m.host),
-		imgStatus,
 	))
 
 	// Edit host
@@ -686,17 +674,17 @@ func (m *model) View() string {
 	if m.showHelp {
 		b.WriteString(m.help.FullHelpView([][]key.Binding{
 			{m.keys.PlayPause, m.keys.Play, m.keys.Pause, m.keys.Stop, m.keys.Refresh},
-			{m.keys.VolUp, m.keys.VolDown, m.keys.Image},
+			{m.keys.VolUp, m.keys.VolDown},
 			{m.keys.EditHost, m.keys.SaveHost, m.keys.Cancel, m.keys.Help, m.keys.Quit},
 		}))
 	} else {
 		b.WriteString(m.help.ShortHelpView([]key.Binding{
-			m.keys.PlayPause, m.keys.Stop, m.keys.VolUp, m.keys.VolDown, m.keys.Image, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
+			m.keys.PlayPause, m.keys.Stop, m.keys.VolUp, m.keys.VolDown, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
 		}))
 	}
 
 	// Finally, draw the image last so it sits visually on top.
-	if m.showImage && m.winW > 0 && m.imageSeqCached != "" {
+	if m.winW > 0 && m.imageSeqCached != "" {
 		// Reserve a small number of columns near the right edge so a 48px image stays within view.
 		// Typical terminal cell widths are ~8–12 px; reserving 8 cells is a safe default.
 		const reserveCols = 8

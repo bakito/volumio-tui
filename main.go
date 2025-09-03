@@ -602,7 +602,7 @@ var (
 	statusPlay   = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 	statusPause  = lipgloss.NewStyle().Foreground(lipgloss.Color("220")).Bold(true)
 	statusStop   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Bold(true)
-	connectedOn  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	connectedOn  = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	connectedOff = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	dimStyle     = lipgloss.NewStyle().Faint(true)
 )

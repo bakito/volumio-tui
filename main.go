@@ -4,13 +4,10 @@ import (
 	"context"
 	_ "embed"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,136 +15,23 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/grandcat/zeroconf"
+
+	"github.com/bakito/volumio-tui/internal/client"
+)
+
+const (
+	pollInterval = 2 * time.Second
 )
 
 //go:embed volumio48.png
 var volumioPNG []byte
 
-const (
-	httpTimeout  = 5 * time.Second
-	pollInterval = 2 * time.Second
-)
-
 var Version = "devel"
-
-type volumioClient struct {
-	baseURL string
-	http    *http.Client
-}
-
-func newVolumioClient(base string) (*volumioClient, error) {
-	u, err := url.Parse(base)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
-	}
-	if u.Scheme == "" {
-		u.Scheme = "http"
-	}
-	if u.Host == "" {
-		return nil, errors.New("URL must include a host")
-	}
-	return &volumioClient{
-		baseURL: u.String(),
-		http: &http.Client{
-			Timeout: httpTimeout,
-		},
-	}, nil
-}
-
-func (c *volumioClient) cmd(ctx context.Context, command string) error {
-	reqURL := fmt.Sprintf("%s/api/v1/commands/?cmd=%s", strings.TrimRight(c.baseURL, "/"), url.QueryEscape(command))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
-	if err != nil {
-		return err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	// Volumio may respond 200 or 204 for commands; treat 2xx as success.
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("command %q failed: status %d", command, resp.StatusCode)
-	}
-	return nil
-}
-
-func (c *volumioClient) Play(ctx context.Context) error   { return c.cmd(ctx, "play") }
-func (c *volumioClient) Pause(ctx context.Context) error  { return c.cmd(ctx, "pause") }
-func (c *volumioClient) Stop(ctx context.Context) error   { return c.cmd(ctx, "stop") }
-func (c *volumioClient) Toggle(ctx context.Context) error { return c.cmd(ctx, "toggle") }
-
-// SetVolume sets the absolute volume (0..100).
-func (c *volumioClient) SetVolume(ctx context.Context, vol int) error {
-	if vol < 0 {
-		vol = 0
-	}
-	if vol > 100 {
-		vol = 100
-	}
-	// Build the query properly so &volume is not escaped into the cmd value.
-	reqURL := fmt.Sprintf("%s/api/v1/commands/?cmd=volume&volume=%d", strings.TrimRight(c.baseURL, "/"), vol)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
-	if err != nil {
-		return err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("set volume failed: status %d", resp.StatusCode)
-	}
-	return nil
-}
-
-type state struct {
-	Status       string  `json:"status"` // "play","pause","stop"
-	Title        string  `json:"title"`
-	Artist       string  `json:"artist"`
-	Album        string  `json:"album"`
-	Seek         int64   `json:"seek"`
-	Duration     float64 `json:"duration"`
-	Volume       int     `json:"volume"`
-	Repeat       bool    `json:"repeat"`
-	Random       bool    `json:"random"`
-	Consume      bool    `json:"consume"`
-	VolumioVer   string  `json:"volumio_version"`
-	Service      string  `json:"service"`
-	TrackType    string  `json:"trackType"`
-	Samplerate   string  `json:"samplerate"`
-	Bitdepth     string  `json:"bitdepth"`
-	Channels     int     `json:"channels"`
-	Updated      string  `json:"updated"`
-	DisableState bool    `json:"disableUiControls"`
-}
-
-func (c *volumioClient) GetState(ctx context.Context) (state, error) {
-	var s state
-	reqURL := strings.TrimRight(c.baseURL, "/") + "/api/v1/getState"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
-	if err != nil {
-		return s, err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return s, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return s, fmt.Errorf("getState failed: status %d", resp.StatusCode)
-	}
-	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(&s); err != nil {
-		return s, err
-	}
-	return s, nil
-}
 
 // TUI
 
@@ -168,7 +52,6 @@ type keymap struct {
 
 func defaultKeymap() keymap {
 	return keymap{
-		// Use " " (single space) for the space key
 		PlayPause: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle play/pause")),
 		Play:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "play")),
 		Pause:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "pause")),
@@ -185,10 +68,10 @@ func defaultKeymap() keymap {
 }
 
 type model struct {
-	client     *volumioClient
+	client     *client.VolumioClient
 	hostInput  textinput.Model
 	host       string
-	st         state
+	st         client.State
 	err        error
 	loading    bool
 	pollTicker *time.Ticker
@@ -197,6 +80,7 @@ type model struct {
 	showHelp   bool
 	editing    bool
 	connected  bool
+	spin       spinner.Model
 
 	// Image rendering/cache
 	winW, winH     int
@@ -211,11 +95,16 @@ func initialModel(host string) *model {
 	ti.CharLimit = 256
 	ti.Blur()
 
+	s := spinner.New()
+	s.Spinner = spinner.MiniDot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+
 	m := &model{
 		hostInput: ti,
 		host:      ti.Value(),
 		keys:      defaultKeymap(),
 		help:      help.New(),
+		spin:      s,
 	}
 
 	if len(volumioPNG) > 0 {
@@ -297,7 +186,7 @@ func discoverVolumio(ctx context.Context) (string, error) {
 	// Collect the first viable entry and stop.
 	go func() {
 		for e := range entries {
-			// Prefer IPv4 address if available; otherwise, use hostname.
+			// Prefer IPv4 address if available; otherwise, use the hostname.
 			var host string
 			switch {
 			case len(e.AddrIPv4) > 0:
@@ -339,7 +228,7 @@ func discoverVolumio(ctx context.Context) (string, error) {
 }
 
 type (
-	refreshMsg   state
+	refreshMsg   client.State
 	errorMsg     error
 	connectedMsg struct{ ok bool }
 )
@@ -353,48 +242,21 @@ func (m *model) Init() tea.Cmd {
 
 func (m *model) connectCmd(host string) tea.Cmd {
 	return func() tea.Msg {
-		client, err := newVolumioClient(host)
+		cl, err := client.NewVolumioClient(host)
 		if err != nil {
 			return errorMsg(err)
 		}
 		// Quick connectivity probe (resolve host) to provide immediate feedback.
-		if err := probeHost(client.baseURL); err != nil {
+
+		if err := cl.ProbeHost(); err != nil {
 			m.connected = false
-			m.client = client // still set, user can retry
+			m.client = cl // still set, user can retry
 			return errorMsg(fmt.Errorf("connect: %w", err))
 		}
-		m.client = client
+		m.client = cl
 		m.connected = true
 		return connectedMsg{ok: true}
 	}
-}
-
-func probeHost(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return err
-	}
-	host := u.Host
-	if !strings.Contains(host, ":") {
-		host += ":80"
-	}
-	d := net.Dialer{Timeout: 2 * time.Second}
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel1()
-	conn, err := d.DialContext(ctx1, "tcp", host)
-	if err != nil {
-		// Try common Volumio port if user omitted it
-		host3000 := u.Hostname() + ":3000"
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel2()
-		if c2, err2 := d.DialContext(ctx2, "tcp", host3000); err2 == nil {
-			_ = c2.Close()
-			return nil
-		}
-		return err
-	}
-	_ = conn.Close()
-	return nil
 }
 
 func (m *model) startPolling() tea.Cmd {
@@ -409,7 +271,7 @@ func (m *model) refreshCmd() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), client.HTTPTimeout)
 		defer cancel()
 		st, err := m.client.GetState(ctx)
 		if err != nil {
@@ -435,7 +297,7 @@ func (m *model) toggleCmd() tea.Cmd {
 	return m.simpleCmd(func(ctx context.Context) error { return m.client.Toggle(ctx) })
 }
 
-// changeVolume adjusts volume relative to current state by delta and sets it.
+// changeVolume adjusts volume relative to the current state by delta and sets it.
 func (m *model) changeVolume(delta int) tea.Cmd {
 	if m.client == nil {
 		return nil
@@ -455,7 +317,7 @@ func (m *model) simpleCmd(fn func(context.Context) error) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), client.HTTPTimeout)
 		defer cancel()
 		if err := fn(ctx); err != nil {
 			return errorMsg(err)
@@ -561,9 +423,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case refreshMsg:
-		m.st = state(msg)
+		// Detect play-state transitions to start/stop spinner ticking.
+		prevPlaying := strings.EqualFold(m.st.Status, "play")
+		m.st = client.State(msg)
 		m.err = nil
 		m.loading = false
+		nextPlaying := strings.EqualFold(m.st.Status, "play")
+
+		if nextPlaying && !prevPlaying {
+			return m, m.spin.Tick
+		}
 		return m, nil
 
 	case connectedMsg:
@@ -581,16 +450,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// fallthrough
 	}
 
+	// Update spinner state on all messages, but only keep ticking while playing.
+	var spinCmd tea.Cmd
+	m.spin, spinCmd = m.spin.Update(msg)
+	shouldSpin := strings.EqualFold(m.st.Status, "play")
+
 	// Poll ticker
 	if m.pollTicker != nil {
 		select {
 		case <-m.pollTicker.C:
 			cmd := m.refreshCmd()
+			if shouldSpin {
+				return m, tea.Batch(cmd, spinCmd)
+			}
 			return m, cmd
 		default:
 		}
 	}
 
+	if shouldSpin {
+		return m, spinCmd
+	}
 	return m, nil
 }
 
@@ -624,9 +504,6 @@ func (m *model) View() string {
 		labelStyle.Render("Status:"), conn,
 		labelStyle.Render("Host:"), valueStyle.Render(m.host),
 	)
-	if m.loading {
-		statusLine += "  " + dimStyle.Render("Working...")
-	}
 	b.WriteString(statusLine + "\n")
 
 	// Edit host
@@ -639,7 +516,7 @@ func (m *model) View() string {
 	statusText := strings.ToLower(m.st.Status)
 	switch statusText {
 	case "play":
-		statusText = statusPlay.Render("PLAY")
+		statusText = m.spin.View() + statusPlay.Render(" PLAY")
 	case "pause":
 		statusText = statusPause.Render("PAUSE")
 	case "stop":
@@ -663,6 +540,10 @@ func (m *model) View() string {
 	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Track:   "), valueStyle.Render(track)))
 	b.WriteString(fmt.Sprintf("%s %s%%\n", labelStyle.Render("Volume:  "), valueStyle.Render(strconv.Itoa(m.st.Volume))))
 
+	if m.loading {
+		b.WriteString(labelStyle.Render("Working..."))
+	}
+
 	// Error
 	if m.err != nil {
 		b.WriteString("\n" + errorStyle.Render("Error: "+m.err.Error()) + "\n")
@@ -684,8 +565,6 @@ func (m *model) View() string {
 
 	// Finally, draw the image last so it sits visually on top.
 	if m.winW > 0 && m.imageSeqCached != "" {
-		// Reserve a small number of columns near the right edge so a 48px image stays within view.
-		// Typical terminal cell widths are ~8–12 px; reserving 8 cells is a safe default.
 		const reserveCols = 8
 		col := m.winW - reserveCols + 1
 		if col < 1 {

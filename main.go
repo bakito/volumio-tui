@@ -160,7 +160,7 @@ type model struct {
 	connected  bool
 }
 
-func initialModel() model {
+func initialModel() *model {
 	ti := textinput.New()
 	ti.Prompt = "Host: "
 	ti.SetValue(getDefaultHost())
@@ -168,7 +168,7 @@ func initialModel() model {
 	ti.Placeholder = defaultBaseURL
 	ti.Blur()
 
-	return model{
+	return &model{
 		hostInput: ti,
 		host:      ti.Value(),
 		keys:      defaultKeymap(),
@@ -199,7 +199,7 @@ type (
 	connectedMsg struct{ ok bool }
 )
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		m.connectCmd(m.host),
 		m.refreshCmd(),
@@ -248,14 +248,14 @@ func probeHost(raw string) error {
 	return nil
 }
 
-func (m model) startPolling() tea.Cmd {
+func (m *model) startPolling() tea.Cmd {
 	return func() tea.Msg {
 		m.pollTicker = time.NewTicker(pollInterval)
 		return nil
 	}
 }
 
-func (m model) refreshCmd() tea.Cmd {
+func (m *model) refreshCmd() tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
@@ -270,23 +270,23 @@ func (m model) refreshCmd() tea.Cmd {
 	}
 }
 
-func (m model) playCmd() tea.Cmd {
+func (m *model) playCmd() tea.Cmd {
 	return m.simpleCmd(func(ctx context.Context) error { return m.client.Play(ctx) })
 }
 
-func (m model) pauseCmd() tea.Cmd {
+func (m *model) pauseCmd() tea.Cmd {
 	return m.simpleCmd(func(ctx context.Context) error { return m.client.Pause(ctx) })
 }
 
-func (m model) stopCmd() tea.Cmd {
+func (m *model) stopCmd() tea.Cmd {
 	return m.simpleCmd(func(ctx context.Context) error { return m.client.Stop(ctx) })
 }
 
-func (m model) toggleCmd() tea.Cmd {
+func (m *model) toggleCmd() tea.Cmd {
 	return m.simpleCmd(func(ctx context.Context) error { return m.client.Toggle(ctx) })
 }
 
-func (m model) simpleCmd(fn func(context.Context) error) tea.Cmd {
+func (m *model) simpleCmd(fn func(context.Context) error) tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
@@ -300,7 +300,7 @@ func (m model) simpleCmd(fn func(context.Context) error) tea.Cmd {
 	}
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.editing {
@@ -405,7 +405,7 @@ var (
 	dimStyle     = lipgloss.NewStyle().Faint(true)
 )
 
-func (m model) View() string {
+func (m *model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Volumio TUI Controller"))
 	b.WriteString("\n")

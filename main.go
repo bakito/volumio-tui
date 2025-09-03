@@ -233,7 +233,6 @@ type (
 func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		m.connectCmd(m.host),
-		m.refreshCmd(),
 		m.startPolling(),
 	)
 }
@@ -342,7 +341,12 @@ func (m *model) simpleCmd(fn func(context.Context) error) tea.Cmd {
 		if err := fn(ctx); err != nil {
 			return errorMsg(err)
 		}
-		return m.refreshCmd()()
+		// Immediately refresh, then schedule a short delayed refresh
+		// to capture any lagging state updates from the backend.
+		return tea.Batch(
+			m.refreshCmd(),
+			tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return m.refreshCmd()() }),
+		)()
 	}
 }
 
@@ -431,8 +435,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case connectedMsg:
-		// Could update a banner; already set connected flag in connectCmd.
-		return m, nil
+		// After a successful connection, perform an initial refresh.
+		m.loading = true
+		return m, m.refreshCmd()
 
 	case errorMsg:
 		m.err = msg

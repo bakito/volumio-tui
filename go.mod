@@ -3,7 +3,7 @@ module github.com/bakito/volumio-tui
 go 1.25
 
 require (
-	github.com/charmbracelet/bubbles v1.0.0
+	github.com/charmbracelet/bubbles/v2 v2.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/grandcat/zeroconf v1.0.0

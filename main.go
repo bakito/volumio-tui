@@ -11,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/grandcat/zeroconf"
 
 	"github.com/bakito/volumio-tui/internal/client"
@@ -285,7 +285,7 @@ func (m *model) simpleCmd(fn func(context.Context) error) tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if m.editing {
 			switch {
 			case key.Matches(msg, m.keys.SaveHost):
@@ -354,15 +354,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Step by -5
 			cmd := m.changeVolume(-5)
 			return m, cmd
-		case msg.Type == tea.KeySpace: // fallback for terminals not matching the binding
+		case msg.String() == " ": // fallback for terminals not matching the binding
 			m.loading = true
 			cmd := m.toggleCmd()
 			return m, cmd
-		case msg.Type == tea.KeyUp: // fallback for terminals not matching "up"
+		case msg.String() == "up": // fallback for terminals not matching "up"
 			m.loading = true
 			cmd := m.changeVolume(5)
 			return m, cmd
-		case msg.Type == tea.KeyDown: // fallback for terminals not matching "down"
+		case msg.String() == "down": // fallback for terminals not matching "down"
 			m.loading = true
 			cmd := m.changeVolume(-5)
 			return m, cmd
@@ -434,7 +434,7 @@ var (
 	dimStyle     = lipgloss.NewStyle().Faint(true)
 )
 
-func (m *model) View() string {
+func (m *model) View() tea.View {
 	var b strings.Builder
 
 	// Draw the rest of the UI first.
@@ -510,7 +510,9 @@ func (m *model) View() string {
 		}))
 	}
 
-	return b.String()
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	return v
 }
 
 func main() {
@@ -532,7 +534,7 @@ func main() {
 		fmt.Println("No default host found")
 		os.Exit(1)
 	}
-	p := tea.NewProgram(initialModel(host), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(host))
 	if _, err := p.Run(); err != nil {
 		fmt.Println("Error:", err)
 		os.Exit(1)

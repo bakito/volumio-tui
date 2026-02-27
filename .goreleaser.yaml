@@ -21,7 +21,7 @@ snapshot:
   version_template: "{{ .Tag }}-next"
 changelog:
   sort: asc
-  use: github
+  use: github-native
   filters:
     exclude:
       - '^docs:'

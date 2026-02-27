@@ -11,7 +11,8 @@ build:
 
 release: tb.goreleaser tb.semver
 	@version=$$($(TB_SEMVER)); \
-	git tag -s $$version -m"Release $$version"
+	git tag -s $$version -m"Release $$version"; \
+	git push origin $$version
 	$(TB_GORELEASER) --clean
 
 test-release: tb.goreleaser

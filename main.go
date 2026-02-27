@@ -44,7 +44,7 @@ type keymap struct {
 
 func defaultKeymap() keymap {
 	return keymap{
-		PlayPause: key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle play/pause")),
+		PlayPause: key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "toggle play/pause")),
 		Play:      key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "play")),
 		Pause:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "pause")),
 		Stop:      key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "stop")),

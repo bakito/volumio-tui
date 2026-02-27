@@ -166,6 +166,12 @@ linters:
           disabled: true
         - name: use-fmt-print
           disabled: true
+        - name: enforce-switch-style
+          disabled: true
+        - name: unhandled-error
+          arguments:
+            - '^fmt\.(Fp|P)?rint(f|ln)?$'
+            - '^(bytes\.Buffer|string\.Writer|strings\.Builder)\.Write(Byte|Rune|String)?$'
     staticcheck:
       checks:
        - 'all'

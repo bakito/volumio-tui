@@ -483,9 +483,9 @@ func (m *model) View() tea.View {
 		track = strings.Join(parts, " ")
 	}
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Playback:"), statusText))
-	b.WriteString(fmt.Sprintf("%s %s\n", labelStyle.Render("Track:   "), valueStyle.Render(track)))
-	b.WriteString(fmt.Sprintf("%s %s%%\n", labelStyle.Render("Volume:  "), valueStyle.Render(strconv.Itoa(m.st.Volume))))
+	fmt.Fprintf(&b, "%s %s\n", labelStyle.Render("Playback:"), statusText)
+	fmt.Fprintf(&b, "%s %s\n", labelStyle.Render("Track:   "), valueStyle.Render(track))
+	fmt.Fprintf(&b, "%s %s%%\n", labelStyle.Render("Volume:  "), valueStyle.Render(strconv.Itoa(m.st.Volume)))
 
 	if m.loading {
 		b.WriteString(labelStyle.Render("Working..."))
@@ -506,7 +506,14 @@ func (m *model) View() tea.View {
 		}))
 	} else {
 		b.WriteString(m.help.ShortHelpView([]key.Binding{
-			m.keys.PlayPause, m.keys.Stop, m.keys.VolUp, m.keys.VolDown, m.keys.EditHost, m.keys.Refresh, m.keys.Help, m.keys.Quit,
+			m.keys.PlayPause,
+			m.keys.Stop,
+			m.keys.VolUp,
+			m.keys.VolDown,
+			m.keys.EditHost,
+			m.keys.Refresh,
+			m.keys.Help,
+			m.keys.Quit,
 		}))
 	}
 

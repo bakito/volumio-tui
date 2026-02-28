@@ -1,7 +1,6 @@
 name: govulncheck
 on:
   push:
-    branches: [ checks ]
   pull_request:
   schedule: # daily at 10:22 UTC
     - cron: '22 10 * * *'
@@ -10,6 +9,7 @@ permissions:
   contents: read
 jobs:
   govulncheck:
+    name: Run govulncheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -19,4 +19,4 @@ jobs:
         with:
           go-version-file: go.mod
       - run: |
-          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+          go run golang.org/x/vuln/cmd/govulncheck@latest -show verbose,color ./...

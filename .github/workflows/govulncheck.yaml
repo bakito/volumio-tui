@@ -2,14 +2,14 @@ name: govulncheck
 on:
   push:
   pull_request:
-  schedule: # daily at 10:22 UTC
-    - cron: '22 10 * * *'
+  schedule: # daily at 03:37 UTC
+    - cron: '37 03 * * *'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   govulncheck:
-    name: Run govulncheck
+    name: Check Vulnerabilities
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

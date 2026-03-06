@@ -1,10 +1,10 @@
 module github.com/bakito/volumio-tui
 
-go 1.25
+go 1.26
 
 require (
 	charm.land/bubbles/v2 v2.0.0
-	charm.land/bubbletea/v2 v2.0.0
+	charm.land/bubbletea/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.0
 	github.com/grandcat/zeroconf v1.0.0
 )

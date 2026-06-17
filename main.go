@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	_ "embed"
 	"flag"
 	"fmt"
 	"net"
@@ -21,9 +20,14 @@ import (
 
 	"github.com/bakito/volumio-tui/internal/client"
 	"github.com/bakito/volumio-tui/internal/version"
+
+	_ "embed"
 )
 
-const pollInterval = 2 * time.Second
+const (
+	pollInterval = 2 * time.Second
+	volumeDelta  = 5
+)
 
 // TUI
 
@@ -261,6 +265,15 @@ func (m *model) changeVolume(delta int) tea.Cmd {
 	if newVol > 100 {
 		newVol = 100
 	}
+	// Round down to the next smaller multiple of delta
+	absDelta := delta
+	if absDelta < 0 {
+		absDelta = -absDelta
+	}
+	if absDelta > 0 {
+		newVol = (newVol / absDelta) * absDelta
+	}
+
 	return m.simpleCmd(func(ctx context.Context) error { return m.client.SetVolume(ctx, newVol) })
 }
 
@@ -347,12 +360,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.VolUp):
 			m.loading = true
 			// Step by 5
-			cmd := m.changeVolume(5)
+			cmd := m.changeVolume(volumeDelta)
 			return m, cmd
 		case key.Matches(msg, m.keys.VolDown):
 			m.loading = true
 			// Step by -5
-			cmd := m.changeVolume(-5)
+			cmd := m.changeVolume(-volumeDelta)
 			return m, cmd
 		case msg.String() == " ": // fallback for terminals not matching the binding
 			m.loading = true
@@ -360,11 +373,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		case msg.String() == "up": // fallback for terminals not matching "up"
 			m.loading = true
-			cmd := m.changeVolume(5)
+			cmd := m.changeVolume(volumeDelta)
 			return m, cmd
 		case msg.String() == "down": // fallback for terminals not matching "down"
 			m.loading = true
-			cmd := m.changeVolume(-5)
+			cmd := m.changeVolume(-volumeDelta)
 			return m, cmd
 		default:
 		}

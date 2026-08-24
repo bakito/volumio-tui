@@ -3,8 +3,8 @@ module github.com/bakito/volumio-tui
 go 1.26.6
 
 require (
-	charm.land/bubbles/v2 v2.1.1
-	charm.land/bubbletea/v2 v2.0.8
+	charm.land/bubbles/v2 v2.2.0
+	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/grandcat/zeroconf v1.0.0
 )

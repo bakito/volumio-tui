@@ -1,6 +1,6 @@
 module github.com/bakito/volumio-tui
 
-go 1.26.6
+go 1.27.2
 
 require (
 	charm.land/bubbles/v2 v2.2.1
